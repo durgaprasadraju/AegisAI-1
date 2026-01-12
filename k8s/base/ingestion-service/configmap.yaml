@@ -1,0 +1,9 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: ingestion-service-config
+  labels:
+    app: ingestion-service
+data:
+  environment: "dev"
+  # TODO: Add service-specific configuration

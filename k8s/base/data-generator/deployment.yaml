@@ -1,0 +1,34 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: data-generator
+  labels:
+    app: data-generator
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: data-generator
+  template:
+    metadata:
+      labels:
+        app: data-generator
+    spec:
+      containers:
+      - name: data-generator
+        image: aegisai/data-generator:latest
+        ports:
+        - containerPort: 8080
+        env:
+        - name: ENVIRONMENT
+          valueFrom:
+            configMapKeyRef:
+              name: data-generator-config
+              key: environment
+        resources:
+          requests:
+            memory: "128Mi"
+            cpu: "100m"
+          limits:
+            memory: "256Mi"
+            cpu: "200m"

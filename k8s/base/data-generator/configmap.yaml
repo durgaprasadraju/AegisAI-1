@@ -1,0 +1,9 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: data-generator-config
+  labels:
+    app: data-generator
+data:
+  environment: "dev"
+  # TODO: Add service-specific configuration

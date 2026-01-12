@@ -1,0 +1,18 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+resources:
+  - ../../base/data-generator
+  - ../../base/ingestion-service
+  - ../../base/ml-service
+  - ../../base/alert-service
+  - ../../base/api-gateway
+
+namespace: aegisai-dev
+
+commonLabels:
+  environment: dev
+
+patchesStrategicMerge:
+  - patches/replicas.yaml
+  - patches/resources.yaml

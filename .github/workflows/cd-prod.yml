@@ -1,0 +1,63 @@
+name: Deploy to Production
+
+on:
+  push:
+    branches: [ main ]
+  workflow_dispatch:
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    environment: 
+      name: production
+      url: https://api.aegisai.com
+    steps:
+      - uses: actions/checkout@v3
+      
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v2
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: us-east-1
+      
+      - name: Set up Terraform
+        uses: hashicorp/setup-terraform@v2
+        with:
+          terraform_version: 1.5.0
+      
+      - name: Terraform Init
+        working-directory: infrastructure/envs/prod
+        run: terraform init
+      
+      - name: Terraform Plan
+        working-directory: infrastructure/envs/prod
+        run: terraform plan -out=tfplan
+      
+      - name: Terraform Apply
+        working-directory: infrastructure/envs/prod
+        run: terraform apply -auto-approve tfplan
+      
+      - name: Build and push Docker images
+        uses: docker/build-push-action@v4
+        with:
+          context: .
+          push: true
+          tags: |
+            aegisai/data-generator:prod-${{ github.sha }}
+            aegisai/data-generator:latest
+            aegisai/ingestion-service:prod-${{ github.sha }}
+            aegisai/ingestion-service:latest
+            aegisai/ml-service:prod-${{ github.sha }}
+            aegisai/ml-service:latest
+            aegisai/alert-service:prod-${{ github.sha }}
+            aegisai/alert-service:latest
+            aegisai/api-gateway:prod-${{ github.sha }}
+            aegisai/api-gateway:latest
+      
+      - name: Deploy to EKS
+        uses: aws-actions/amazon-eks-deploy@v1
+        with:
+          cluster-name: aegisai-eks-prod
+          namespace: aegisai-prod
+          manifests: k8s/overlays/prod
