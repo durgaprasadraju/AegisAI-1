@@ -58,8 +58,13 @@ func runExampleWithInterfaces(ctx context.Context) {
 	}
 
 	fmt.Println("╔═══════════════════════════════════════════════════════════════╗")
-	fmt.Println("║  AegisAI Data Generator - Interfaces & Functions (Day 3)      ║")
+	fmt.Println("║  AegisAI Data Generator - Kafka & DynamoDB (Day 3)           ║")
 	fmt.Println("╚═══════════════════════════════════════════════════════════════╝")
+	fmt.Println()
+	fmt.Println("This demonstration shows:")
+	fmt.Println("  • Kafka integration (local Docker Kafka)")
+	fmt.Println("  • DynamoDB integration (LocalStack)")
+	fmt.Println("  • Same code works in production with only config changes")
 	fmt.Println()
 
 	// ============================================================================
@@ -68,6 +73,17 @@ func runExampleWithInterfaces(ctx context.Context) {
 	// We create concrete implementations, but store them as interfaces.
 	// This is dependency injection - we inject dependencies rather than creating them.
 	fmt.Println("=== Step 1: Initialize Implementations (Dependency Injection) ===")
+
+	// Load configuration from environment variables
+	// These configs work with local Kafka (Docker) and LocalStack (DynamoDB)
+	// In production, only the environment variables change, not the code
+	kafkaConfig := generator.LoadKafkaConfig()
+	dynamoConfig := generator.LoadDynamoConfig()
+
+	fmt.Printf("Kafka Config: broker=%s, topic=%s\n", kafkaConfig.Broker, kafkaConfig.Topic)
+	fmt.Printf("DynamoDB Config: endpoint=%s, region=%s, table=%s\n",
+		dynamoConfig.Endpoint, dynamoConfig.Region, dynamoConfig.Table)
+	fmt.Println()
 
 	// Create generators for different sensor types
 	// These implement the SensorGenerator interface
@@ -79,20 +95,34 @@ func runExampleWithInterfaces(ctx context.Context) {
 	generators = append(generators, generator.NewRandomSensorGenerator(generator.SensorTypePressure, 1))
 
 	// Create publisher (implements Publisher interface)
-	// In production, this would be: publisher := NewKafkaPublisher(kafkaConfig)
-	var publisher generator.Publisher = generator.NewInMemoryPublisher()
+	// This uses KafkaLocalPublisher which connects to local Kafka (Docker)
+	// In production, same code works with AWS MSK - just change KAFKA_BROKER env var
+	publisher, err := generator.NewKafkaLocalPublisher(kafkaConfig)
+	if err != nil {
+		fmt.Printf("Error initializing Kafka publisher: %v\n", err)
+		fmt.Println("Make sure Kafka is running (docker-compose up kafka)")
+		return
+	}
+	defer publisher.Close() // Ensure cleanup on exit
 
 	// Create storage (implements Storage interface)
-	// In production, this would be: storage := NewDynamoDBStorage(dynamoConfig)
-	var storage generator.Storage = generator.NewInMemoryStorage()
+	// This uses DynamoLocalStorage which connects to LocalStack
+	// In production, same code works with real DynamoDB - just change DYNAMO_ENDPOINT env var
+	storage, err := generator.NewDynamoLocalStorage(dynamoConfig)
+	if err != nil {
+		fmt.Printf("Error initializing DynamoDB storage: %v\n", err)
+		fmt.Println("Make sure LocalStack is running (docker-compose up localstack)")
+		return
+	}
 
 	fmt.Println("Initialized:")
 	fmt.Println("  - 5 SensorGenerators (random simulation)")
-	fmt.Println("  - InMemoryPublisher (will be replaced with KafkaPublisher)")
-	fmt.Println("  - InMemoryStorage (will be replaced with DynamoDBStorage)")
+	fmt.Println("  - KafkaLocalPublisher (connects to local Kafka at " + kafkaConfig.Broker + ")")
+	fmt.Println("  - DynamoLocalStorage (connects to LocalStack at " + dynamoConfig.Endpoint + ")")
 	fmt.Println()
 	fmt.Println("Key Point: All variables are interfaces, not concrete types!")
 	fmt.Println("  This means we can swap implementations without changing this code.")
+	fmt.Println("  Local Kafka and LocalStack use the same protocols as production!")
 	fmt.Println()
 
 	// ============================================================================
@@ -232,15 +262,16 @@ func runExampleWithInterfaces(ctx context.Context) {
 	fmt.Println("     - Fast, isolated unit tests")
 	fmt.Println()
 	fmt.Println("  2. GRADUAL MIGRATION:")
-	fmt.Println("     - Start: InMemoryPublisher (logs to console)")
-	fmt.Println("     - Next: KafkaPublisher (sends to Kafka)")
-	fmt.Println("     - No code changes needed in this function!")
+	fmt.Println("     - Day 2: InMemoryPublisher (logs to console)")
+	fmt.Println("     - Day 3: KafkaLocalPublisher (sends to local Kafka)")
+	fmt.Println("     - Production: Same code, change KAFKA_BROKER env var to MSK")
+	fmt.Println("     - No code changes needed!")
 	fmt.Println()
 	fmt.Println("  3. MULTIPLE ENVIRONMENTS:")
-	fmt.Println("     - Dev: InMemoryPublisher")
-	fmt.Println("     - Staging: KafkaPublisher with test topic")
-	fmt.Println("     - Prod: KafkaPublisher with production topic")
-	fmt.Println("     - Same code, different implementations")
+	fmt.Println("     - Local: KafkaLocalPublisher (localhost:9092)")
+	fmt.Println("     - Staging: Same code, KAFKA_BROKER=staging-kafka:9092")
+	fmt.Println("     - Prod: Same code, KAFKA_BROKER=msk-broker:9092")
+	fmt.Println("     - Same code, different configurations")
 	fmt.Println()
 	fmt.Println("  4. SERVICE BOUNDARIES:")
 	fmt.Println("     - data-generator: Uses Publisher interface")
@@ -256,15 +287,18 @@ func runExampleWithInterfaces(ctx context.Context) {
 	fmt.Println("║              Future Integration Patterns                       ║")
 	fmt.Println("╚═══════════════════════════════════════════════════════════════╝")
 	fmt.Println()
-	fmt.Println("TO REPLACE InMemoryPublisher WITH KafkaPublisher:")
-	fmt.Println("  // Just change the initialization:")
-	fmt.Println("  publisher := NewKafkaPublisher(kafkaConfig)")
-	fmt.Println("  // Rest of code stays the same!")
+	fmt.Println("CURRENT IMPLEMENTATION (Day 3):")
+	fmt.Println("  • KafkaLocalPublisher: Connects to local Kafka (Docker)")
+	fmt.Println("  • DynamoLocalStorage: Connects to LocalStack")
+	fmt.Println("  • Both use same protocols as production!")
 	fmt.Println()
-	fmt.Println("TO REPLACE InMemoryStorage WITH DynamoDBStorage:")
-	fmt.Println("  // Just change the initialization:")
-	fmt.Println("  storage := NewDynamoDBStorage(dynamoConfig)")
-	fmt.Println("  // Rest of code stays the same!")
+	fmt.Println("TO MIGRATE TO PRODUCTION:")
+	fmt.Println("  // No code changes needed!")
+	fmt.Println("  // Just set environment variables:")
+	fmt.Println("  export KAFKA_BROKER=msk-broker-1:9092,msk-broker-2:9092")
+	fmt.Println("  export DYNAMO_ENDPOINT=  # Empty = use real AWS")
+	fmt.Println("  export AWS_REGION=us-east-1")
+	fmt.Println("  // Same code, different config!")
 	fmt.Println()
 	fmt.Println("TO USE REAL SENSORS:")
 	fmt.Println("  // Just change the generator:")

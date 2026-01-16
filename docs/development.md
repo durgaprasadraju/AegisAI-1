@@ -39,7 +39,7 @@ cd docker
 docker-compose -f docker-compose.kafka.yml up -d
 
 # Run services individually
-go run cmd/data-generator/main.go
+cd services/data-generator && go run cmd/day2/main.go
 go run cmd/ingestion-service/main.go
 go run cmd/ml-service/main.go
 go run cmd/alert-service/main.go

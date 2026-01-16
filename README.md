@@ -48,7 +48,7 @@ AegisAI consists of 5 microservices:
 
 3. **Or run services individually**:
    ```bash
-   go run cmd/data-generator/main.go
+   cd services/data-generator && go run cmd/day2/main.go
    go run cmd/ingestion-service/main.go
    # ... etc
    ```
