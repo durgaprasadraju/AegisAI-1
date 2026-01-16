@@ -5,10 +5,13 @@ import (
 	"fmt"
 	"os"
 	"os/signal"
+	"sync"
 	"syscall"
 	"time"
 
+	"github.com/aegisai/data-generator/internal/domain"
 	"github.com/aegisai/data-generator/internal/generator"
+	"github.com/aegisai/data-generator/internal/usecase"
 )
 
 func main() {
@@ -25,8 +28,14 @@ func main() {
 		cancel()
 	}()
 
-	// Run the example demonstration using interfaces
+	// Run the example demonstration using interfaces (Day 3)
 	runExampleWithInterfaces(ctx)
+
+	// Optional: Run consumer group example with DLQ (Day 6)
+	// Enable by setting environment variable: export RUN_CONSUMER_GROUP_DEMO=true
+	if os.Getenv("RUN_CONSUMER_GROUP_DEMO") == "true" {
+		runConsumerGroupWithDLQExample(ctx)
+	}
 
 	// In production, this would start the actual data-generator service
 	// that continuously generates readings and sends them to Kafka
@@ -311,4 +320,199 @@ func runExampleWithInterfaces(ctx context.Context) {
 	fmt.Println("  Business logic depends on WHAT, not HOW")
 	fmt.Println("  This is the Dependency Inversion Principle!")
 	fmt.Println()
+}
+
+// ============================================================================
+// CONSUMER GROUP WITH DLQ EXAMPLE - Day 6 Advanced Features
+// ============================================================================
+// This demonstrates the ConsumerGroup with Kafka DLQ publisher integration.
+// This shows how failed events are persisted to Kafka DLQ topic for later analysis.
+
+// runConsumerGroupWithDLQExample demonstrates ConsumerGroup with DLQ Kafka publishing.
+// This integrates the consumer group use case with the DLQ Kafka publisher.
+func runConsumerGroupWithDLQExample(ctx context.Context) {
+	fmt.Println()
+	fmt.Println("╔═══════════════════════════════════════════════════════════════╗")
+	fmt.Println("║  Consumer Group with DLQ Kafka Publisher (Day 6)            ║")
+	fmt.Println("╚═══════════════════════════════════════════════════════════════╝")
+	fmt.Println()
+
+	// ============================================================================
+	// STEP 1: Initialize DLQ Kafka Publisher
+	// ============================================================================
+	fmt.Println("=== Step 1: Initialize DLQ Kafka Publisher ===")
+
+	kafkaConfig := generator.LoadKafkaConfig()
+	fmt.Printf("Kafka Config: broker=%s, topic=%s, dlq_topic=%s\n",
+		kafkaConfig.Broker, kafkaConfig.Topic, kafkaConfig.DLQTopic)
+
+	// Create DLQ ingester (Kafka publisher for DLQ topic)
+	dlqIngester, err := generator.NewKafkaDLQIngester(kafkaConfig)
+	if err != nil {
+		fmt.Printf("Error initializing DLQ Kafka publisher: %v\n", err)
+		fmt.Println("DLQ will use logging-only mode (no Kafka publishing)")
+		dlqIngester = nil
+	} else {
+		defer dlqIngester.Close()
+		fmt.Printf("✓ DLQ Kafka publisher initialized (topic: %s)\n", kafkaConfig.DLQTopic)
+	}
+	fmt.Println()
+
+	// ============================================================================
+	// STEP 2: Setup Consumer Group with DLQ
+	// ============================================================================
+	fmt.Println("=== Step 2: Setup Consumer Group with DLQ ===")
+
+	logger := usecase.NewSimpleLogger()
+
+	// Create a simple ingester that publishes to main Kafka topic
+	// In production, this would be a KafkaIngester that publishes to the main topic
+	mainIngester := &SimpleKafkaIngester{
+		kafkaConfig: kafkaConfig,
+		logger:      logger,
+	}
+	defer mainIngester.Close() // Ensure cleanup on exit
+
+	// Create single event use case
+	singleUseCase := usecase.NewIngestSensorUseCase(mainIngester, logger)
+
+	// Load consumer group configuration
+	config := usecase.LoadConsumerGroupConfig()
+
+	// Create consumer group with DLQ ingester
+	consumerGroup := usecase.NewConsumerGroupUseCase(config, singleUseCase, logger, dlqIngester)
+	fmt.Println("✓ Consumer group created with DLQ support")
+	fmt.Printf("  - Partitions: %d\n", config.PartitionCount)
+	fmt.Printf("  - Workers per partition: %d\n", config.WorkersPerPartition)
+	fmt.Printf("  - Max retries: %d\n", config.MaxRetries)
+	if dlqIngester != nil {
+		fmt.Printf("  - DLQ: Publishing to Kafka topic '%s'\n", kafkaConfig.DLQTopic)
+	} else {
+		fmt.Println("  - DLQ: Logging only (no Kafka publisher)")
+	}
+	fmt.Println()
+
+	// ============================================================================
+	// STEP 3: Start Consumer Group
+	// ============================================================================
+	fmt.Println("=== Step 3: Start Consumer Group ===")
+
+	if err := consumerGroup.Start(ctx); err != nil {
+		fmt.Printf("Error starting consumer group: %v\n", err)
+		return
+	}
+	fmt.Println("✓ Consumer group started")
+	fmt.Println()
+
+	// ============================================================================
+	// STEP 4: Generate and Submit Events
+	// ============================================================================
+	fmt.Println("=== Step 4: Generate and Submit Events ===")
+
+	// Generate some events using the new GenerateSensorEvent function
+	for i := 0; i < 10; i++ {
+		event := generator.GenerateSensorEvent(
+			generator.SensorTypeTemperature,
+			1, // sensor number
+			i, // event index
+		)
+
+		if err := consumerGroup.Ingest(event); err != nil {
+			fmt.Printf("  ✗ Error submitting event %d: %v\n", i+1, err)
+		} else {
+			fmt.Printf("  ✓ Submitted event %d: %s (sensor: %s)\n", i+1, event.EventID, event.SensorID)
+		}
+	}
+	fmt.Println()
+
+	// ============================================================================
+	// STEP 5: Wait for Processing
+	// ============================================================================
+	fmt.Println("=== Step 5: Wait for Processing (including retries and DLQ) ===")
+	fmt.Println("Waiting for events to be processed...")
+	time.Sleep(3 * time.Second)
+	fmt.Println()
+
+	// ============================================================================
+	// STEP 6: Graceful Shutdown
+	// ============================================================================
+	fmt.Println("=== Step 6: Graceful Shutdown ===")
+	consumerGroup.Shutdown()
+	fmt.Println("✓ Consumer group shut down complete")
+	fmt.Println()
+
+	fmt.Println("╔═══════════════════════════════════════════════════════════════╗")
+	fmt.Println("║              Consumer Group + DLQ Demo Complete               ║")
+	fmt.Println("╚═══════════════════════════════════════════════════════════════╝")
+	fmt.Println()
+	fmt.Println("Key Points:")
+	fmt.Println("  • Events processed through ConsumerGroup with partitions")
+	fmt.Println("  • Failed events retried with exponential backoff")
+	fmt.Println("  • Events exceeding max retries published to Kafka DLQ topic")
+	fmt.Println("  • DLQ topic: " + kafkaConfig.DLQTopic)
+	fmt.Println()
+}
+
+// SimpleKafkaIngester is a simple ingester that publishes to the main Kafka topic.
+// This is used for the ConsumerGroup demonstration in main.go.
+//
+// Thread-Safety:
+// - Uses mutex-protected lazy initialization for the Kafka publisher
+// - Safe for concurrent use by multiple worker goroutines
+// - KafkaLocalPublisher itself is thread-safe (kafka-go writer is concurrent-safe)
+type SimpleKafkaIngester struct {
+	kafkaConfig *generator.KafkaConfig
+	logger      usecase.Logger
+	publisher   *generator.KafkaLocalPublisher
+	mu          sync.Mutex // Protects publisher initialization
+}
+
+// Ingest publishes the event to the main Kafka topic.
+// This implements the SensorIngester interface.
+//
+// Thread-Safety:
+// - Uses double-check locking pattern for thread-safe lazy initialization
+// - Safe to call from multiple goroutines concurrently
+func (s *SimpleKafkaIngester) Ingest(ctx context.Context, event domain.SensorEvent) error {
+	// Thread-safe lazy initialization using double-check locking pattern
+	if s.publisher == nil {
+		s.mu.Lock()
+		// Double-check after acquiring lock (another goroutine might have initialized)
+		if s.publisher == nil {
+			var err error
+			s.publisher, err = generator.NewKafkaLocalPublisher(s.kafkaConfig)
+			if err != nil {
+				s.mu.Unlock()
+				return fmt.Errorf("failed to create Kafka publisher: %w", err)
+			}
+		}
+		s.mu.Unlock()
+	}
+
+	// Convert SensorEvent to SensorData for publishing
+	// Note: This is a simplified conversion - in production, you might want
+	// a more sophisticated adapter that handles the conversion properly
+	sensorData := generator.SensorData{
+		ID:        event.SensorID,
+		Type:      event.SensorType,
+		Value:     event.Value,
+		Unit:      event.Unit,
+		Timestamp: event.Timestamp,
+	}
+
+	// Publish to Kafka main topic
+	// Note: KafkaLocalPublisher.Publish() is thread-safe - can be called concurrently
+	return s.publisher.Publish(ctx, sensorData)
+}
+
+// Close closes the Kafka publisher and releases resources.
+// This should be called when the ingester is no longer needed.
+func (s *SimpleKafkaIngester) Close() error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if s.publisher != nil {
+		return s.publisher.Close()
+	}
+	return nil
 }

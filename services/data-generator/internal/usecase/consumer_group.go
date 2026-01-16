@@ -60,6 +60,7 @@ type ConsumerGroupUseCase struct {
 	// Dependencies
 	singleUseCase *IngestSensorUseCase // Unit of work for each event
 	logger        Logger
+	dlqIngester   SensorIngester // Optional: DLQ publisher (nil = logging only)
 
 	// Partition channels - one per partition
 	// Each partition maintains ordering for events with same key
@@ -78,11 +79,14 @@ type ConsumerGroupUseCase struct {
 	mu      sync.Mutex // Protects started flag
 }
 
-// NewConsumerGroupUseCase creates a new consumer group use case
+// NewConsumerGroupUseCase creates a new consumer group use case.
+// The dlqIngester parameter is optional - if nil, failed events will only be logged.
+// If provided, failed events will be published to the DLQ topic via the ingester.
 func NewConsumerGroupUseCase(
 	config *ConsumerGroupConfig,
 	singleUseCase *IngestSensorUseCase,
 	logger Logger,
+	dlqIngester SensorIngester, // Optional: nil = logging only
 ) *ConsumerGroupUseCase {
 	// Create partition channels
 	partitions := make([]chan domain.SensorEvent, config.PartitionCount)
@@ -100,6 +104,7 @@ func NewConsumerGroupUseCase(
 		config:        config,
 		singleUseCase: singleUseCase,
 		logger:        logger,
+		dlqIngester:   dlqIngester,
 		partitions:    partitions,
 		dlq:           dlq,
 		started:       false,
@@ -404,16 +409,16 @@ func (cg *ConsumerGroupUseCase) sendToDLQ(event domain.SensorEvent) error {
 }
 
 // dlqConsumer is a goroutine that consumes events from the Dead Letter Queue.
-// In production, this would:
-// - Persist to a DLQ topic/table
-// - Send alerts/notifications
-// - Enable manual reprocessing
-//
-// For now, it logs failed events (placeholder for persistence).
+// If dlqIngester is provided, failed events are published to the DLQ Kafka topic.
+// If dlqIngester is nil, events are only logged (backward compatible behavior).
 func (cg *ConsumerGroupUseCase) dlqConsumer() {
 	defer cg.wg.Done()
 
-	cg.logger.Info("DLQ consumer started")
+	if cg.dlqIngester != nil {
+		cg.logger.Info("DLQ consumer started (publishing to Kafka DLQ topic)")
+	} else {
+		cg.logger.Info("DLQ consumer started (logging only, no DLQ publisher configured)")
+	}
 	dlqCount := 0
 
 	for {
@@ -426,10 +431,24 @@ func (cg *ConsumerGroupUseCase) dlqConsumer() {
 			}
 
 			dlqCount++
-			// In production, this would persist to DLQ storage
-			// For now, log the failed event
-			cg.logger.Error(fmt.Sprintf("DLQ: Failed event %s (sensor: %s, type: %s, value: %.2f %s)",
-				event.EventID, event.SensorID, event.SensorType, event.Value, event.Unit), nil)
+
+			// Publish to DLQ topic if ingester is configured
+			if cg.dlqIngester != nil {
+				// Publish to Kafka DLQ topic
+				if err := cg.dlqIngester.Ingest(cg.ctx, event); err != nil {
+					// Log error but don't crash - DLQ failures shouldn't kill the system
+					cg.logger.Error(fmt.Sprintf("DLQ: Failed to publish event %s to DLQ topic (sensor: %s, type: %s, value: %.2f %s)",
+						event.EventID, event.SensorID, event.SensorType, event.Value, event.Unit), err)
+				} else {
+					// Successfully published to DLQ
+					cg.logger.Error(fmt.Sprintf("DLQ: Published failed event %s to DLQ topic (sensor: %s, type: %s, value: %.2f %s)",
+						event.EventID, event.SensorID, event.SensorType, event.Value, event.Unit), nil)
+				}
+			} else {
+				// No DLQ publisher configured, just log
+				cg.logger.Error(fmt.Sprintf("DLQ: Failed event %s (sensor: %s, type: %s, value: %.2f %s) - no DLQ publisher configured",
+					event.EventID, event.SensorID, event.SensorType, event.Value, event.Unit), nil)
+			}
 
 		case <-cg.ctx.Done():
 			// Context cancelled

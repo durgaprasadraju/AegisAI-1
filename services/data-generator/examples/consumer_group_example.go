@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/aegisai/data-generator/internal/domain"
+	"github.com/aegisai/data-generator/internal/generator"
 	"github.com/aegisai/data-generator/internal/usecase"
 )
 
@@ -88,8 +89,24 @@ func runConsumerGroupExample(ctx context.Context) {
 	// Create single event use case
 	singleUseCase := usecase.NewIngestSensorUseCase(ingester, logger)
 
-	// Create consumer group use case
-	consumerGroup := usecase.NewConsumerGroupUseCase(config, singleUseCase, logger)
+	// Create DLQ ingester (Kafka publisher for DLQ topic)
+	// This publishes failed events to Kafka DLQ topic for persistence and reprocessing
+	var dlqIngester usecase.SensorIngester
+	kafkaConfig := generator.LoadKafkaConfig()
+	dlqIngesterImpl, err := generator.NewKafkaDLQIngester(kafkaConfig)
+	if err != nil {
+		// If DLQ publisher fails to initialize, log warning but continue
+		// (backward compatible - system works without DLQ publisher)
+		logger.Error("Failed to initialize DLQ Kafka publisher, DLQ will log only", err)
+		dlqIngester = nil
+	} else {
+		dlqIngester = dlqIngesterImpl
+		fmt.Printf("DLQ Kafka publisher initialized (topic: %s)\n", kafkaConfig.DLQTopic)
+		defer dlqIngesterImpl.Close()
+	}
+
+	// Create consumer group use case with DLQ ingester
+	consumerGroup := usecase.NewConsumerGroupUseCase(config, singleUseCase, logger, dlqIngester)
 	fmt.Println("Use cases created")
 	fmt.Println()
 

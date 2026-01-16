@@ -211,7 +211,12 @@ pipeline.Shutdown()
 ```go
 config := usecase.LoadConsumerGroupConfig()
 singleUseCase := usecase.NewIngestSensorUseCase(ingester, logger)
-consumerGroup := usecase.NewConsumerGroupUseCase(config, singleUseCase, logger)
+
+// Optional: Create DLQ ingester to publish failed events to Kafka DLQ topic
+// If nil, failed events will only be logged
+var dlqIngester usecase.SensorIngester // Can be nil for logging-only mode
+
+consumerGroup := usecase.NewConsumerGroupUseCase(config, singleUseCase, logger, dlqIngester)
 
 consumerGroup.Start(ctx)
 consumerGroup.Ingest(event)

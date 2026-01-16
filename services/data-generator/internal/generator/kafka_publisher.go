@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/aegisai/data-generator/internal/domain"
 	"github.com/segmentio/kafka-go"
 )
 
@@ -194,3 +195,96 @@ func (p *KafkaLocalPublisher) Close() error {
 // - Partition distribution
 // - Error handling
 // - All the complexity of Kafka protocol
+
+// ============================================================================
+// KAFKA DLQ INGESTER - Dead Letter Queue Publisher
+// ============================================================================
+// KafkaDLQIngester implements the SensorIngester interface by publishing
+// failed sensor events to a Kafka DLQ topic. This allows failed events to be:
+// - Persisted for later analysis
+// - Reprocessed after fixing underlying issues
+// - Monitored and alerted on
+//
+// Architecture:
+// - Uses KafkaLocalPublisher internally for DLQ topic
+// - Publishes domain.SensorEvent as JSON (preserves all event data)
+// - Follows SensorIngester interface pattern for consistency
+
+// KafkaDLQIngester publishes failed sensor events to a Kafka DLQ topic.
+// It implements the SensorIngester interface, allowing it to be used
+// interchangeably with other ingester implementations.
+type KafkaDLQIngester struct {
+	writer *kafka.Writer
+	topic  string
+}
+
+// NewKafkaDLQIngester creates a new DLQ ingester that publishes to a Kafka DLQ topic.
+// It creates a Kafka writer configured with the DLQ topic from the config.
+//
+// Example:
+//   config := LoadKafkaConfig()
+//   dlqIngester, err := NewKafkaDLQIngester(config)
+//   if err != nil {
+//       log.Fatal(err)
+//   }
+//   defer dlqIngester.Close()
+func NewKafkaDLQIngester(config *KafkaConfig) (*KafkaDLQIngester, error) {
+	if err := config.Validate(); err != nil {
+		return nil, fmt.Errorf("invalid kafka config: %w", err)
+	}
+
+	// Create Kafka writer for DLQ topic
+	// The writer handles connection pooling, retries, and error handling
+	writer := &kafka.Writer{
+		Addr:         kafka.TCP(config.Broker),
+		Topic:        config.DLQTopic,
+		Balancer:     &kafka.LeastBytes{}, // Distribute messages across partitions
+		WriteTimeout: 10 * time.Second,   // Timeout for write operations
+		RequiredAcks: kafka.RequireOne,   // Wait for at least one broker acknowledgment
+		Async:        false,               // Synchronous writes for reliability
+	}
+
+	return &KafkaDLQIngester{
+		writer: writer,
+		topic:  config.DLQTopic,
+	}, nil
+}
+
+// Ingest publishes a failed sensor event to the Kafka DLQ topic.
+// This method implements the SensorIngester interface.
+//
+// The event is serialized to JSON and published with the SensorID as the message key,
+// ensuring events from the same sensor are routed to the same partition.
+func (k *KafkaDLQIngester) Ingest(ctx context.Context, event domain.SensorEvent) error {
+	// Serialize SensorEvent to JSON
+	jsonData, err := json.Marshal(event)
+	if err != nil {
+		return fmt.Errorf("failed to marshal sensor event: %w", err)
+	}
+
+	// Create Kafka message
+	// Key: sensor ID (ensures same sensor goes to same partition)
+	// Value: JSON-serialized sensor event
+	message := kafka.Message{
+		Key:   []byte(event.SensorID),
+		Value: jsonData,
+		Time:  time.Now(),
+	}
+
+	// Send message to DLQ topic
+	err = k.writer.WriteMessages(ctx, message)
+	if err != nil {
+		return fmt.Errorf("failed to publish event to DLQ topic %s: %w", k.topic, err)
+	}
+
+	return nil
+}
+
+// Close closes the Kafka writer and releases resources.
+// This should be called when the DLQ ingester is no longer needed.
+func (k *KafkaDLQIngester) Close() error {
+	if k.writer != nil {
+		return k.writer.Close()
+	}
+	return nil
+}

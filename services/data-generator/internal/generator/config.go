@@ -22,8 +22,9 @@ import (
 // - Production: AWS MSK broker endpoints
 // - No code changes needed, only config changes
 type KafkaConfig struct {
-	Broker string // Kafka broker address (e.g., "localhost:9092")
-	Topic  string // Kafka topic name (e.g., "sensor-data")
+	Broker  string // Kafka broker address (e.g., "localhost:9092")
+	Topic   string // Kafka topic name (e.g., "sensor-data")
+	DLQTopic string // Dead Letter Queue topic name (e.g., "sensor-data-dlq")
 }
 
 // LoadKafkaConfig loads Kafka configuration from environment variables.
@@ -32,14 +33,17 @@ type KafkaConfig struct {
 // Environment variables:
 //   - KAFKA_BROKER: Kafka broker address (default: "localhost:9092")
 //   - KAFKA_TOPIC: Kafka topic name (default: "sensor-data")
+//   - KAFKA_DLQ_TOPIC: Dead Letter Queue topic name (default: "sensor-data-dlq")
 //
 // Example:
 //   export KAFKA_BROKER=localhost:9092
 //   export KAFKA_TOPIC=sensor-data
+//   export KAFKA_DLQ_TOPIC=sensor-data-dlq
 //
 // In production, these would be set to:
 //   export KAFKA_BROKER=msk-broker-1.example.com:9092,msk-broker-2.example.com:9092
 //   export KAFKA_TOPIC=sensor-data-prod
+//   export KAFKA_DLQ_TOPIC=sensor-data-prod-dlq
 func LoadKafkaConfig() *KafkaConfig {
 	broker := os.Getenv("KAFKA_BROKER")
 	if broker == "" {
@@ -51,9 +55,15 @@ func LoadKafkaConfig() *KafkaConfig {
 		topic = "sensor-data" // Default topic name
 	}
 
+	dlqTopic := os.Getenv("KAFKA_DLQ_TOPIC")
+	if dlqTopic == "" {
+		dlqTopic = "sensor-data-dlq" // Default DLQ topic name
+	}
+
 	return &KafkaConfig{
-		Broker: broker,
-		Topic:  topic,
+		Broker:   broker,
+		Topic:    topic,
+		DLQTopic: dlqTopic,
 	}
 }
 
@@ -124,6 +134,10 @@ func (c *KafkaConfig) Validate() error {
 	}
 	if c.Topic == "" {
 		return fmt.Errorf("kafka topic name is required")
+	}
+	// DLQTopic is optional, but if provided, should not be empty
+	if c.DLQTopic != "" && c.DLQTopic == "" {
+		return fmt.Errorf("kafka DLQ topic name cannot be empty if provided")
 	}
 	return nil
 }

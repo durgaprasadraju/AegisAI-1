@@ -1,6 +1,11 @@
 package generator
 
-import "time"
+import (
+	"fmt"
+	"time"
+
+	"github.com/aegisai/data-generator/internal/domain"
+)
 
 // ============================================================================
 // PURE FUNCTIONS - Stateless Data Manipulation
@@ -111,4 +116,72 @@ func FilterReadingsByType(readings []SensorData, sensorType string) []SensorData
 func GetLatestReadingFromMap(latest map[string]SensorData, sensorID string) (SensorData, bool) {
 	reading, exists := latest[sensorID]
 	return reading, exists
+}
+
+// ============================================================================
+// SENSOR EVENT GENERATION - Domain Model
+// ============================================================================
+
+// GenerateSensorEvent creates a new SensorEvent instance for the given sensor type.
+// This generates domain.SensorEvent (the newer domain model) instead of SensorData.
+// It includes EventID, Tags, and other metadata that SensorData doesn't have.
+//
+// Why use domain.SensorEvent instead of SensorData?
+// - SensorEvent is the domain model used throughout use cases
+// - Includes EventID for unique identification
+// - Includes Tags for metadata (location, zone, etc.)
+// - Consistent with Clean Architecture (domain layer)
+//
+// This function is a pure function - no side effects, easy to test.
+func GenerateSensorEvent(sensorType string, sensorNumber int, eventIndex int) domain.SensorEvent {
+	// Get the appropriate config based on sensor type
+	var config SensorConfig
+	switch sensorType {
+	case SensorTypeTemperature:
+		config = TemperatureConfig
+	case SensorTypeHumidity:
+		config = HumidityConfig
+	case SensorTypeMoisture:
+		config = MoistureConfig
+	case SensorTypePressure:
+		config = PressureConfig
+	default:
+		// Default to temperature if unknown type
+		config = TemperatureConfig
+	}
+
+	// Generate sensor ID
+	sensorID := config.GenerateSensorID(sensorNumber)
+
+	// Generate event ID
+	eventID := fmt.Sprintf("event-%03d", eventIndex)
+
+	// Generate timestamp
+	timestamp := time.Now().Add(time.Duration(eventIndex) * time.Second)
+
+	// Create SensorEvent with Tags
+	return domain.SensorEvent{
+		EventID:    eventID,
+		SensorID:   sensorID,
+		SensorType: config.Type,
+		Value:      config.GenerateRandomValue(),
+		Unit:       config.Unit,
+		Timestamp:  timestamp,
+		Tags: map[string]string{
+			"location":   "warehouse-A",
+			"zone":       fmt.Sprintf("zone-%d", (eventIndex%3)+1),
+			"source":     "data-generator",
+			"sensor_type": config.Type,
+		},
+	}
+}
+
+// GenerateSensorEvents creates multiple SensorEvent instances.
+// This is useful for batch generation in examples and tests.
+func GenerateSensorEvents(sensorType string, sensorNumber int, count int) []domain.SensorEvent {
+	events := make([]domain.SensorEvent, 0, count)
+	for i := 0; i < count; i++ {
+		events = append(events, GenerateSensorEvent(sensorType, sensorNumber, i))
+	}
+	return events
 }
